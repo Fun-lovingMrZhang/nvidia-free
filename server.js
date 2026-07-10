@@ -6,10 +6,37 @@ const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 20128;
+const ADMIN_KEY = process.env.ADMIN_KEY || '';
 
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ============ 管理员认证中间件 ============
+function requireAdmin(req, res, next) {
+  // 未设置 ADMIN_KEY 则跳过认证（向后兼容）
+  if (!ADMIN_KEY) return next();
+  
+  const authHeader = req.headers['x-admin-key'] || req.headers['authorization'] || '';
+  const key = authHeader.replace(/^Bearer\s+/i, '').trim();
+  
+  if (key === ADMIN_KEY) return next();
+  
+  return res.status(401).json({ error: '需要管理员认证，请提供正确的 Admin Key' });
+}
+
+// 检查是否需要认证（给前端用）
+app.get('/api/auth/status', (req, res) => {
+  res.json({ requireAuth: !!ADMIN_KEY });
+});
+
+// 验证管理员密钥
+app.post('/api/auth/login', (req, res) => {
+  const { key } = req.body;
+  if (!ADMIN_KEY) return res.json({ success: true, message: '未设置管理员密钥' });
+  if (key === ADMIN_KEY) return res.json({ success: true });
+  return res.status(401).json({ success: false, error: '密钥错误' });
+});
 
 // ============ 数据存储 ============
 const DATA_DIR = fs.existsSync('/app/data') ? '/app/data' : __dirname;
@@ -72,10 +99,10 @@ function addLog(type, message, detail = '') {
   if (stats.recentLogs.length > 200) stats.recentLogs.pop();
 }
 
-// ============ API 路由 ============
+// ============ API 路由（需要管理员认证）============
 
 // 获取所有 Key
-app.get('/api/keys', (req, res) => {
+app.get('/api/keys', requireAdmin, (req, res) => {
   res.json(appData.keys.map((k, i) => ({
     id: i,
     key: k.key.substring(0, 12) + '...' + k.key.substring(k.key.length - 6),
@@ -89,7 +116,7 @@ app.get('/api/keys', (req, res) => {
 });
 
 // 添加 Key
-app.post('/api/keys', (req, res) => {
+app.post('/api/keys', requireAdmin, (req, res) => {
   const { key } = req.body;
   if (!key || !key.trim()) return res.status(400).json({ error: 'Key 不能为空' });
   
@@ -105,7 +132,7 @@ app.post('/api/keys', (req, res) => {
 });
 
 // 删除 Key
-app.delete('/api/keys/:id', (req, res) => {
+app.delete('/api/keys/:id', requireAdmin, (req, res) => {
   const id = parseInt(req.params.id);
   if (id < 0 || id >= appData.keys.length) return res.status(404).json({ error: 'Key 不存在' });
   
@@ -116,7 +143,7 @@ app.delete('/api/keys/:id', (req, res) => {
 });
 
 // 切换 Key 状态
-app.put('/api/keys/:id/toggle', (req, res) => {
+app.put('/api/keys/:id/toggle', requireAdmin, (req, res) => {
   const id = parseInt(req.params.id);
   if (id < 0 || id >= appData.keys.length) return res.status(404).json({ error: 'Key 不存在' });
   
@@ -126,7 +153,7 @@ app.put('/api/keys/:id/toggle', (req, res) => {
 });
 
 // 获取统计
-app.get('/api/stats', (req, res) => {
+app.get('/api/stats', requireAdmin, (req, res) => {
   const uptime = Math.floor((Date.now() - stats.startTime) / 1000);
   res.json({
     totalRequests: stats.totalRequests,
@@ -139,18 +166,18 @@ app.get('/api/stats', (req, res) => {
 });
 
 // 获取日志
-app.get('/api/logs', (req, res) => {
+app.get('/api/logs', requireAdmin, (req, res) => {
   const limit = parseInt(req.query.limit) || 50;
   res.json(stats.recentLogs.slice(0, limit));
 });
 
 // 获取设置
-app.get('/api/settings', (req, res) => {
+app.get('/api/settings', requireAdmin, (req, res) => {
   res.json(appData.settings);
 });
 
 // 更新设置
-app.put('/api/settings', (req, res) => {
+app.put('/api/settings', requireAdmin, (req, res) => {
   const { model, baseUrl, proxyKey } = req.body;
   if (model !== undefined) appData.settings.model = model;
   if (baseUrl !== undefined) appData.settings.baseUrl = baseUrl;
@@ -160,7 +187,7 @@ app.put('/api/settings', (req, res) => {
 });
 
 // 获取可用模型列表
-app.get('/api/models', async (req, res) => {
+app.get('/api/models', requireAdmin, async (req, res) => {
   // 使用第一个可用的 Key 来获取模型列表
   const keyObj = appData.keys.find(k => k.enabled && k.key);
   if (!keyObj) {
@@ -209,7 +236,7 @@ function getDefaultModels() {
 }
 
 // 测试 Key 连通性
-app.post('/api/test-key', async (req, res) => {
+app.post('/api/test-key', requireAdmin, async (req, res) => {
   const { key } = req.body;
   if (!key) return res.status(400).json({ error: 'Key 不能为空' });
   

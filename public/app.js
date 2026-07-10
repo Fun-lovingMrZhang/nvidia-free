@@ -1,26 +1,130 @@
 // ============ 前端应用 ============
 
 const API = '';
+let adminKey = localStorage.getItem('adminKey') || '';
 
 // 初始化
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  // 检查是否需要认证
+  const needAuth = await checkAuth();
+  if (needAuth && !adminKey) {
+    showLogin();
+    return;
+  }
+  if (needAuth) {
+    // 验证已保存的 key 是否有效
+    const valid = await tryLogin(adminKey);
+    if (!valid) {
+      showLogin();
+      return;
+    }
+  }
+  initApp();
+});
+
+function initApp() {
+  document.getElementById('loginOverlay').style.display = 'none';
+  document.getElementById('appMain').style.display = '';
   loadKeys();
   loadStats();
   loadLogs();
   loadSettings();
   initModelDropdown();
   
-  // 定时刷新
   setInterval(loadStats, 3000);
   setInterval(loadLogs, 5000);
   setInterval(loadKeys, 5000);
-});
+}
+
+// ============ 认证 ============
+
+async function checkAuth() {
+  try {
+    const res = await fetch(`${API}/api/auth/status`);
+    const data = await res.json();
+    return data.requireAuth;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function tryLogin(key) {
+  try {
+    const res = await fetch(`${API}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key })
+    });
+    const data = await res.json();
+    return data.success;
+  } catch (e) {
+    return false;
+  }
+}
+
+function showLogin() {
+  document.getElementById('loginOverlay').style.display = 'flex';
+  document.getElementById('appMain').style.display = 'none';
+  document.getElementById('loginKeyInput').focus();
+}
+
+async function doLogin() {
+  const key = document.getElementById('loginKeyInput').value.trim();
+  if (!key) {
+    showLoginError('请输入管理员密钥');
+    return;
+  }
+  const btn = document.getElementById('loginBtn');
+  btn.textContent = '验证中...';
+  btn.disabled = true;
+  
+  const valid = await tryLogin(key);
+  if (valid) {
+    adminKey = key;
+    localStorage.setItem('adminKey', key);
+    initApp();
+  } else {
+    showLoginError('密钥错误，请重试');
+  }
+  btn.textContent = '登 录';
+  btn.disabled = false;
+}
+
+function showLoginError(msg) {
+  const el = document.getElementById('loginError');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+function logout() {
+  adminKey = '';
+  localStorage.removeItem('adminKey');
+  showLogin();
+}
+
+// 给所有 fetch 加上认证头
+async function authFetch(url, options = {}) {
+  if (adminKey) {
+    options.headers = options.headers || {};
+    if (options.headers instanceof Headers) {
+      options.headers.set('X-Admin-Key', adminKey);
+    } else {
+      options.headers['X-Admin-Key'] = adminKey;
+    }
+  }
+  const res = await fetch(url, options);
+  if (res.status === 401) {
+    showLogin();
+    throw new Error('认证失败');
+  }
+  return res;
+}
 
 // ============ Key 管理 ============
 
 async function loadKeys() {
   try {
-    const res = await fetch(`${API}/api/keys`);
+    const res = await authFetch(`${API}/api/keys`);
     const keys = await res.json();
     renderKeys(keys);
   } catch (e) {
@@ -60,7 +164,7 @@ function renderKeys(keys) {
 
 async function toggleKey(id) {
   try {
-    await fetch(`${API}/api/keys/${id}/toggle`, { method: 'PUT' });
+    await authFetch(`${API}/api/keys/${id}/toggle`, { method: 'PUT' });
     loadKeys();
     showToast('Key 状态已切换');
   } catch (e) {
@@ -71,7 +175,7 @@ async function toggleKey(id) {
 async function deleteKey(id) {
   if (!confirm('确定要删除这个 Key 吗？')) return;
   try {
-    await fetch(`${API}/api/keys/${id}`, { method: 'DELETE' });
+    await authFetch(`${API}/api/keys/${id}`, { method: 'DELETE' });
     loadKeys();
     loadStats();
     showToast('Key 已删除');
@@ -105,7 +209,7 @@ async function addKeys() {
 
   for (const key of keys) {
     try {
-      const res = await fetch(`${API}/api/keys`, {
+      const res = await authFetch(`${API}/api/keys`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key })
@@ -132,7 +236,7 @@ async function addKeys() {
 
 async function loadStats() {
   try {
-    const res = await fetch(`${API}/api/stats`);
+    const res = await authFetch(`${API}/api/stats`);
     const stats = await res.json();
     
     document.getElementById('totalRequests').textContent = stats.totalRequests;
@@ -150,7 +254,7 @@ async function loadStats() {
 
 async function loadLogs() {
   try {
-    const res = await fetch(`${API}/api/logs?limit=80`);
+    const res = await authFetch(`${API}/api/logs?limit=80`);
     const logs = await res.json();
     renderLogs(logs);
   } catch (e) {
@@ -185,7 +289,7 @@ function clearLogs() {
 
 async function loadSettings() {
   try {
-    const res = await fetch(`${API}/api/settings`);
+    const res = await authFetch(`${API}/api/settings`);
     const settings = await res.json();
     
     document.getElementById('settingBaseUrl').value = settings.baseUrl || '';
@@ -202,7 +306,7 @@ async function saveSettings() {
   const proxyKey = document.getElementById('settingProxyKey').value;
   
   try {
-    await fetch(`${API}/api/settings`, {
+    await authFetch(`${API}/api/settings`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ baseUrl, model, proxyKey })
@@ -355,7 +459,7 @@ async function initModelDropdown() {
 async function loadModels() {
   const modelList = document.getElementById('modelList');
   try {
-    const res = await fetch('/api/models');
+    const res = await authFetch('/api/models');
     const data = await res.json();
     allModels = data.models || [];
     renderModels(allModels);

@@ -7,7 +7,21 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="app">
+  <!-- 登录页面 -->
+  <div class="login-overlay" id="loginOverlay" style="display:none;">
+    <div class="login-card">
+      <div class="login-logo">⚡</div>
+      <h2>NVIDIA Free Proxy</h2>
+      <p class="login-subtitle">请输入管理员密钥以访问管理面板</p>
+      <div class="login-form">
+        <input type="password" id="loginKeyInput" placeholder="管理员密钥" onkeydown="if(event.key==='Enter')doLogin()">
+        <p class="login-error" id="loginError" style="display:none;"></p>
+        <button class="btn btn-primary login-btn" id="loginBtn" onclick="doLogin()">登 录</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="app" id="appMain" style="display:none;">
     <!-- 顶部导航 -->
     <header class="header">
       <div class="header-left">
@@ -22,6 +36,7 @@
           <button class="btn-icon" onclick="copyEndpoint()" title="复制">📋</button>
         </div>
         <div class="status-dot" id="serverStatus" title="服务状态"></div>
+        <button class="btn btn-small" onclick="logout()" title="退出登录">退出</button>
       </div>
     </header>
 

@@ -622,6 +622,88 @@ body {
   background: var(--text-dim);
 }
 
+/* ============ Login Page ============ */
+.login-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.login-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 40px;
+  width: 90%;
+  max-width: 380px;
+  text-align: center;
+}
+
+.login-logo {
+  width: 56px;
+  height: 56px;
+  background: linear-gradient(135deg, var(--accent), #a8e600);
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  margin: 0 auto 16px;
+}
+
+.login-card h2 {
+  font-size: 20px;
+  margin-bottom: 6px;
+  background: linear-gradient(135deg, var(--accent), #a8e600);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.login-subtitle {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-bottom: 24px;
+}
+
+.login-form input {
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 14px;
+  text-align: center;
+  letter-spacing: 2px;
+  transition: border-color 0.2s;
+  margin-bottom: 12px;
+}
+
+.login-form input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.login-btn {
+  width: 100%;
+  padding: 12px;
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+.login-error {
+  color: var(--error);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
 /* ============ Model Select Dropdown ============ */
 .model-select-wrapper {
   position: relative;
