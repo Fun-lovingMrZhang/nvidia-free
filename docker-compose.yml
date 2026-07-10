@@ -15,5 +15,5 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=20128
-      # 管理员密钥（建议修改，留空则无需认证）
-      - ADMIN_KEY=your-secret-admin-key-here
+      # 管理员密钥（在 .env 文件中修改）
+      - ADMIN_KEY=${ADMIN_KEY}

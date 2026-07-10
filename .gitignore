@@ -26,5 +26,8 @@ fetch_zhihu.js
 codex_nvidia_proxy-master/
 codex-rust-v0.142.2/
 
+# Environment secrets
+.env
+
 # Go build cache
 vendor/

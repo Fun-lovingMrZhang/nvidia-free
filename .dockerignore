@@ -9,3 +9,4 @@ LICENSE
 英伟达密钥.txt
 启动.bat
 .DS_Store
+.env
