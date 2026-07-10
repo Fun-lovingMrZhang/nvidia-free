@@ -200,8 +200,7 @@ app.get('/api/models', requireAdmin, async (req, res) => {
       headers: {
         'Authorization': `Bearer ${keyObj.key}`,
         'Accept': 'application/json'
-      },
-      timeout: 15000
+      }
     });
 
     if (response.ok) {
@@ -246,8 +245,7 @@ app.post('/api/test-key', requireAdmin, async (req, res) => {
       headers: {
         'Authorization': `Bearer ${key}`,
         'Accept': 'application/json'
-      },
-      timeout: 10000
+      }
     });
     
     if (response.ok) {
@@ -313,8 +311,7 @@ app.all('/v1/*', async (req, res) => {
   try {
     const fetchOptions = {
       method: req.method,
-      headers,
-      timeout: 60000
+      headers
     };
     if (body) fetchOptions.body = body;
 
