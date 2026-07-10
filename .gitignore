@@ -1,0 +1,30 @@
+# Binaries
+*.exe
+*.exe~
+nvidia-proxy
+test_rate
+test_burst
+
+# Dependencies
+node_modules/
+
+# Data files
+data.json
+data/
+
+# Config with API keys
+config.json
+
+# Test files
+test_rate.go
+test_rate.exe
+test_burst.go
+test_burst.exe
+fetch_zhihu.js
+
+# Reference implementations (not part of this project)
+codex_nvidia_proxy-master/
+codex-rust-v0.142.2/
+
+# Go build cache
+vendor/

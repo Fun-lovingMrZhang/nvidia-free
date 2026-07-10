@@ -1,0 +1,11 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+data.json
+*.md
+LICENSE
+注册脚本.txt
+英伟达密钥.txt
+启动.bat
+.DS_Store

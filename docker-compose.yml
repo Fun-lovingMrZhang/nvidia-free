@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  nvidia-free:
+    build: .
+    container_name: nvidia-free
+    restart: unless-stopped
+    ports:
+      - "20128:20128"
+    volumes:
+      # 数据持久化：保存 keys 和配置，容器重建不丢失
+      - ./data:/app/data
+      # 可选：直接挂载密钥文件自动导入（首次启动生效）
+      # - ./英伟达密钥.txt:/app/英伟达密钥.txt:ro
+    environment:
+      - NODE_ENV=production
+      - PORT=20128

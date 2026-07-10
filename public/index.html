@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NVIDIA Free Proxy - 管理面板</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <!-- 顶部导航 -->
+    <header class="header">
+      <div class="header-left">
+        <div class="logo">⚡</div>
+        <h1>NVIDIA Free Proxy</h1>
+        <span class="version">v1.0</span>
+      </div>
+      <div class="header-right">
+        <div class="endpoint">
+          <span class="label">代理地址</span>
+          <code id="endpointUrl">http://localhost:20128/v1</code>
+          <button class="btn-icon" onclick="copyEndpoint()" title="复制">📋</button>
+        </div>
+        <div class="status-dot" id="serverStatus" title="服务状态"></div>
+      </div>
+    </header>
+
+    <!-- 统计卡片 -->
+    <section class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-icon">📊</div>
+        <div class="stat-info">
+          <div class="stat-value" id="totalRequests">0</div>
+          <div class="stat-label">总请求数</div>
+        </div>
+      </div>
+      <div class="stat-card error">
+        <div class="stat-icon">⚠️</div>
+        <div class="stat-info">
+          <div class="stat-value" id="totalErrors">0</div>
+          <div class="stat-label">错误数</div>
+        </div>
+      </div>
+      <div class="stat-card success">
+        <div class="stat-icon">🔑</div>
+        <div class="stat-info">
+          <div class="stat-value" id="activeKeys">0</div>
+          <div class="stat-label">活跃 Key</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">⏱️</div>
+        <div class="stat-info">
+          <div class="stat-value" id="uptime">0s</div>
+          <div class="stat-label">运行时间</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 主内容 -->
+    <div class="main-content">
+      <!-- 左侧：Key 管理 -->
+      <div class="panel">
+        <div class="panel-header">
+          <h2>🔑 API Key 管理</h2>
+          <button class="btn btn-primary" onclick="showAddKeyModal()">+ 添加 Key</button>
+        </div>
+        <div class="panel-body">
+          <div id="keyList" class="key-list">
+            <div class="empty-state">加载中...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧：日志和设置 -->
+      <div class="right-panel">
+        <!-- 设置面板 -->
+        <div class="panel">
+          <div class="panel-header">
+            <h2>⚙️ 配置</h2>
+            <button class="btn btn-small" onclick="saveSettings()">保存</button>
+          </div>
+          <div class="panel-body">
+            <div class="form-group">
+              <label>API 基础地址</label>
+              <input type="text" id="settingBaseUrl" placeholder="https://integrate.api.nvidia.com/v1">
+            </div>
+            <div class="form-group">
+              <label>默认模型</label>
+              <div class="model-select-wrapper">
+                <input type="text" id="settingModel" placeholder="点击选择或输入模型名称" autocomplete="off">
+                <div class="model-dropdown" id="modelDropdown">
+                  <div class="model-search-box">
+                    <input type="text" id="modelSearch" placeholder="搜索模型..." autocomplete="off">
+                  </div>
+                  <div class="model-list" id="modelList">
+                    <div class="model-loading">加载中...</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>代理 API Key <span class="label-hint">（客户端连接时需提供此 Key，留空则不验证）</span></label>
+              <div class="proxy-key-row">
+                <input type="password" id="settingProxyKey" placeholder="留空表示不验证，任意 Key 均可使用">
+                <button class="btn-icon toggle-eye" id="toggleProxyKeyEye" title="显示/隐藏" onclick="toggleProxyKeyVisibility()">👁️</button>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>使用方式</label>
+              <div class="usage-hint">
+                <p>在 Claude Code / Cursor / Codex 中配置：</p>
+                <code id="usageCode">
+                  Endpoint: http://localhost:20128/v1<br>
+                  API Key:  任意值（如设置了代理 Key 则填对应值）<br>
+                  Model: 选择支持的模型
+                </code>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 日志面板 -->
+        <div class="panel flex-1">
+          <div class="panel-header">
+            <h2>📋 请求日志</h2>
+            <button class="btn btn-small" onclick="clearLogs()">清空</button>
+          </div>
+          <div class="panel-body log-body">
+            <div id="logList" class="log-list">
+              <div class="empty-state">暂无日志</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 添加 Key 弹窗 -->
+  <div class="modal-overlay" id="addKeyModal" style="display:none;">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>添加 API Key</h3>
+        <button class="btn-icon" onclick="hideAddKeyModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>NVIDIA API Key</label>
+          <textarea id="newKeyInput" rows="4" placeholder="粘贴 nvapi-... 格式的 Key，多个用换行分隔"></textarea>
+        </div>
+        <p class="hint">💡 从 <a href="https://build.nvidia.com/" target="_blank">build.nvidia.com</a> 获取免费 API Key</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="hideAddKeyModal()">取消</button>
+        <button class="btn btn-primary" onclick="addKeys()">添加</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
