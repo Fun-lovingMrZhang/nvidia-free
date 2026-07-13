@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 20128;
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ============ 管理员认证中间件 ============
@@ -259,6 +259,39 @@ app.post('/api/test-key', requireAdmin, async (req, res) => {
   }
 });
 
+// ============ 调试请求历史 ============
+let requestHistory = []; // 保留最近 50 条请求的摘要
+
+function recordRequest(entry) {
+  requestHistory.unshift(entry);
+  if (requestHistory.length > 50) requestHistory.pop();
+}
+
+// 查看最近请求（调试用）
+app.get('/api/debug/requests', requireAdmin, (req, res) => {
+  res.json({ requests: requestHistory });
+});
+
+// ============ 请求分析工具 ============
+function analyzeRequest(body) {
+  if (!body) return {};
+  const info = {
+    model: body.model || '(使用默认)',
+    messages: body.messages ? body.messages.length : 0,
+    stream: !!body.stream,
+    hasTools: !!(body.tools && body.tools.length > 0),
+    toolCount: body.tools ? body.tools.length : 0,
+    maxTokens: body.max_tokens || '(未设置)',
+    temperature: body.temperature || '(未设置)',
+  };
+  // 估算输入 token（粗略：1 token ≈ 4 字符）
+  if (body.messages) {
+    const totalChars = JSON.stringify(body.messages).length;
+    info.estimatedInputTokens = Math.ceil(totalChars / 4);
+  }
+  return info;
+}
+
 // ============ OpenAI 兼容代理 ============
 app.all('/v1/*', async (req, res) => {
   // 验证代理 API Key
@@ -279,24 +312,29 @@ app.all('/v1/*', async (req, res) => {
 
   const targetPath = req.path.replace(/^\/v1/, '');
   const targetUrl = `${appData.settings.baseUrl}${targetPath}`;
-  
+
+  // 转发客户端原始 User-Agent 和其他可选头
   const headers = {
     'Authorization': `Bearer ${keyObj.key}`,
     'Content-Type': 'application/json',
     'Accept': 'application/json'
   };
+  if (req.headers['user-agent']) {
+    headers['User-Agent'] = req.headers['user-agent'];
+  }
 
   // 构建请求体
   let body = null;
   if (req.method !== 'GET' && req.method !== 'HEAD') {
-    body = JSON.stringify(req.body);
-    
     // 如果没有指定 model，使用默认模型
     if (req.body && !req.body.model) {
-      const newBody = { ...req.body, model: appData.settings.model };
-      body = JSON.stringify(newBody);
+      req.body.model = appData.settings.model;
     }
+    body = JSON.stringify(req.body);
   }
+
+  // 分析请求内容
+  const reqInfo = analyzeRequest(req.body);
 
   stats.totalRequests++;
   keyObj.requests++;
@@ -305,8 +343,40 @@ app.all('/v1/*', async (req, res) => {
 
   const isStream = req.body && req.body.stream;
   const keyLabel = keyObj.key.substring(0, 12) + '...';
-  
-  addLog('info', `📤 ${req.method} ${targetPath}`, `Key: ${keyLabel}${isStream ? ' [流式]' : ''}`);
+  const clientUA = req.headers['user-agent'] || 'unknown';
+
+  // 详细日志
+  const logDetail = [
+    `Model: ${reqInfo.model}`,
+    `Messages: ${reqInfo.messages}`,
+    `Est.InputTokens: ${reqInfo.estimatedInputTokens || '?'}`,
+    `Stream: ${isStream}`,
+    `Tools: ${reqInfo.toolCount}`,
+    `MaxTokens: ${reqInfo.maxTokens}`,
+    `Temp: ${reqInfo.temperature}`,
+    `ClientUA: ${clientUA.substring(0, 80)}`
+  ].join(' | ');
+  addLog('info', `📤 ${req.method} ${targetPath}`, `Key: ${keyLabel} | ${logDetail}`);
+
+  // 记录请求到历史（调试用）
+  const reqRecord = {
+    time: new Date().toISOString(),
+    method: req.method,
+    path: targetPath,
+    clientUA: clientUA.substring(0, 120),
+    ...reqInfo,
+    requestBody: null
+  };
+  // 仅保存 messages 摘要（避免过大），但保存完整 body 到临时变量
+  if (req.body && req.body.messages) {
+    reqRecord.messageRoles = req.body.messages.map(m => m.role || 'unknown');
+    reqRecord.messageLengths = req.body.messages.map(m => (JSON.stringify(m.content || '')).length);
+    // 保存前 2 条消息的 role+snippet 用于调试
+    reqRecord.messageSnippets = req.body.messages.slice(0, 3).map(m => ({
+      role: m.role,
+      contentPreview: typeof m.content === 'string' ? m.content.substring(0, 200) : '(非文本内容)'
+    }));
+  }
 
   try {
     const fetchOptions = {
@@ -322,41 +392,108 @@ app.all('/v1/*', async (req, res) => {
       keyObj.errors++;
       stats.totalErrors++;
       keyObj.status = 'error';
-      addLog('error', `❌ 响应错误 ${response.status}`, `Key: ${keyLabel} | ${errText.substring(0, 200)}`);
+
+      let errDetail = errText.substring(0, 300);
+      try {
+        const errJson = JSON.parse(errText);
+        errDetail = errJson.error?.message || errJson.message || errText.substring(0, 300);
+      } catch(e) {}
+
+      addLog('error', `❌ 上游错误 ${response.status}`, `Key: ${keyLabel} | Model: ${reqInfo.model} | ${errDetail}`);
       setTimeout(() => { keyObj.status = 'idle'; }, 3000);
-      return res.status(response.status).json({ error: { message: `上游错误: ${response.status}`, detail: errText } });
+
+      // 记录请求结果
+      reqRecord.status = 'error';
+      reqRecord.upstreamStatus = response.status;
+      reqRecord.errorDetail = errDetail;
+      recordRequest(reqRecord);
+
+      // 尝试原样转发上游错误 JSON（兼容 Hermes 等客户端的错误解析）
+      try {
+        const errJson = JSON.parse(errText);
+        return res.status(response.status).json(errJson);
+      } catch(e) {
+        return res.status(response.status).json({
+          error: { message: errText.substring(0, 500), type: 'upstream_error', status: response.status }
+        });
+      }
     }
 
     if (isStream) {
-      // 流式响应
-      res.setHeader('Content-Type', 'text/event-stream');
+      // 流式响应 — 转发所有上游头
+      const skipHeaders = new Set(['content-length', 'transfer-encoding', 'connection']);
+      response.headers.forEach((value, name) => {
+        if (!skipHeaders.has(name.toLowerCase())) {
+          res.setHeader(name, value);
+        }
+      });
+      if (!res.getHeader('content-type')) {
+        res.setHeader('Content-Type', 'text/event-stream');
+      }
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
-      
+
+      // 统计流式 chunks
+      let chunkCount = 0;
+      let totalTokens = 0;
+      const originalPipe = response.body.pipe.bind(response.body);
+
+      response.body.on('data', (chunk) => {
+        chunkCount++;
+        // 尝试从 chunk 中提取 usage 信息
+        try {
+          const lines = chunk.toString().split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data: ') && line.trim() !== 'data: [DONE]') {
+              const data = JSON.parse(line.slice(6));
+              if (data.usage) {
+                totalTokens = data.usage.total_tokens || 0;
+              }
+            }
+          }
+        } catch(e) {}
+      });
+
       response.body.pipe(res);
       response.body.on('end', () => {
         keyObj.status = 'idle';
-        addLog('info', `✅ 流式完成`, `Key: ${keyLabel}`);
+        addLog('info', `✅ 流式完成 [${chunkCount} chunks]`, `Key: ${keyLabel} | Model: ${reqInfo.model}${totalTokens ? ` | Tokens: ${totalTokens}` : ''}`);
+        reqRecord.status = 'success';
+        reqRecord.streamChunks = chunkCount;
+        reqRecord.streamTokens = totalTokens;
+        recordRequest(reqRecord);
       });
       response.body.on('error', (err) => {
         keyObj.status = 'error';
         keyObj.errors++;
         stats.totalErrors++;
-        addLog('error', `❌ 流式错误`, `Key: ${keyLabel} | ${err.message}`);
+        addLog('error', `❌ 流式错误`, `Key: ${keyLabel} | Model: ${reqInfo.model} | ${err.message}`);
         res.end();
       });
     } else {
       // 非流式响应
       const data = await response.json();
       keyObj.status = 'idle';
-      addLog('info', `✅ 请求成功`, `Key: ${keyLabel} | Tokens: ${data.usage?.total_tokens || '?'}`);
+
+      const usage = data.usage || {};
+      addLog('info', `✅ 请求成功`, `Key: ${keyLabel} | Model: ${reqInfo.model} | Prompt: ${usage.prompt_tokens || '?'} | Completion: ${usage.completion_tokens || '?'} | Total: ${usage.total_tokens || '?'}${data.choices?.[0]?.finish_reason ? ` | Finish: ${data.choices[0].finish_reason}` : ''}`);
+
+      // 记录请求结果
+      reqRecord.status = 'success';
+      reqRecord.usage = usage;
+      reqRecord.finishReason = data.choices?.[0]?.finish_reason || null;
+      recordRequest(reqRecord);
+
       res.json(data);
     }
   } catch (err) {
     keyObj.errors++;
     stats.totalErrors++;
     keyObj.status = 'error';
-    addLog('error', `❌ 请求失败`, `Key: ${keyLabel} | ${err.message}`);
+    addLog('error', `❌ 请求失败`, `Key: ${keyLabel} | Model: ${reqInfo.model} | ${err.message}`);
+    reqRecord.status = 'failed';
+    reqRecord.errorDetail = err.message;
+    recordRequest(reqRecord);
     setTimeout(() => { keyObj.status = 'idle'; }, 3000);
     res.status(502).json({ error: { message: `代理错误: ${err.message}` } });
   }

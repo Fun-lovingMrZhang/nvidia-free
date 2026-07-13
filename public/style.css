@@ -831,3 +831,119 @@ body {
   padding: 20px;
   font-size: 13px;
 }
+
+/* ============ Debug Request Panel ============ */
+.panel-header-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.debug-list {
+  padding: 4px;
+}
+
+.debug-item {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.debug-item.success { border-left: 3px solid var(--success); }
+.debug-item.error { border-left: 3px solid var(--error); }
+.debug-item.warning { border-left: 3px solid var(--warning); }
+
+.debug-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.debug-time {
+  color: var(--text-dim);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.debug-body {
+  padding: 8px 12px;
+}
+
+.debug-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 3px;
+  font-size: 12px;
+}
+
+.debug-label {
+  color: var(--text-dim);
+  min-width: 70px;
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.debug-value {
+  color: var(--text);
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.debug-value.warn {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.debug-item.error .debug-value {
+  color: var(--error);
+}
+
+.error-detail {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+
+.debug-messages {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+
+.debug-msg {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 11px;
+}
+
+.debug-role {
+  color: var(--accent);
+  font-weight: 600;
+  min-width: 40px;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+.debug-content {
+  color: var(--text-dim);
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.debug-msg.more {
+  color: var(--text-dim);
+  font-style: italic;
+  padding-left: 48px;
+}

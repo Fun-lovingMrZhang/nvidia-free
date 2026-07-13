@@ -139,11 +139,17 @@
         <div class="panel flex-1">
           <div class="panel-header">
             <h2>📋 请求日志</h2>
-            <button class="btn btn-small" onclick="clearLogs()">清空</button>
+            <div class="panel-header-actions">
+              <button class="btn btn-small" id="debugToggleBtn" onclick="toggleDebugView()">🔍 调试详情</button>
+              <button class="btn btn-small" onclick="clearLogs()">清空</button>
+            </div>
           </div>
           <div class="panel-body log-body">
             <div id="logList" class="log-list">
               <div class="empty-state">暂无日志</div>
+            </div>
+            <div id="debugList" class="log-list debug-list" style="display:none;">
+              <div class="empty-state">暂无调试数据</div>
             </div>
           </div>
         </div>

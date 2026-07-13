@@ -34,6 +34,8 @@ function initApp() {
   setInterval(loadStats, 3000);
   setInterval(loadLogs, 5000);
   setInterval(loadKeys, 5000);
+  // 调试视图活跃时也自动刷新
+  setInterval(() => { if (debugViewActive) loadDebugRequests(); }, 5000);
 }
 
 // ============ 认证 ============
@@ -283,6 +285,101 @@ function renderLogs(logs) {
 
 function clearLogs() {
   document.getElementById('logList').innerHTML = '<div class="empty-state">日志已清空</div>';
+}
+
+// ============ 调试详情视图 ============
+
+let debugViewActive = false;
+
+function toggleDebugView() {
+  debugViewActive = !debugViewActive;
+  const logList = document.getElementById('logList');
+  const debugList = document.getElementById('debugList');
+  const btn = document.getElementById('debugToggleBtn');
+
+  if (debugViewActive) {
+    logList.style.display = 'none';
+    debugList.style.display = '';
+    btn.textContent = '📋 普通日志';
+    loadDebugRequests();
+  } else {
+    logList.style.display = '';
+    debugList.style.display = 'none';
+    btn.textContent = '🔍 调试详情';
+  }
+}
+
+async function loadDebugRequests() {
+  try {
+    const res = await authFetch(`${API}/api/debug/requests`);
+    const data = await res.json();
+    renderDebugRequests(data.requests || []);
+  } catch (e) {
+    document.getElementById('debugList').innerHTML = '<div class="empty-state">加载调试数据失败</div>';
+  }
+}
+
+function renderDebugRequests(requests) {
+  const container = document.getElementById('debugList');
+
+  if (requests.length === 0) {
+    container.innerHTML = '<div class="empty-state">暂无调试数据<br><small>有请求进来后会自动记录</small></div>';
+    return;
+  }
+
+  container.innerHTML = requests.map(r => {
+    const statusClass = r.status === 'success' ? 'success' : r.status === 'error' ? 'error' : 'warning';
+    const statusIcon = r.status === 'success' ? '✅' : r.status === 'error' ? '❌' : '⏳';
+    const time = formatLogTime(r.time);
+
+    let detailHtml = '';
+    detailHtml += `<div class="debug-row"><span class="debug-label">客户端</span> <span class="debug-value">${escapeHtml(r.clientUA || 'unknown')}</span></div>`;
+    detailHtml += `<div class="debug-row"><span class="debug-label">模型</span> <span class="debug-value">${escapeHtml(r.model || '?')}</span></div>`;
+    detailHtml += `<div class="debug-row"><span class="debug-label">消息数</span> <span class="debug-value">${r.messages || 0}</span></div>`;
+    if (r.estimatedInputTokens) {
+      detailHtml += `<div class="debug-row"><span class="debug-label">预估Token</span> <span class="debug-value ${r.estimatedInputTokens > 10000 ? 'warn' : ''}">${r.estimatedInputTokens.toLocaleString()}</span></div>`;
+    }
+    detailHtml += `<div class="debug-row"><span class="debug-label">流式</span> <span class="debug-value">${r.stream ? '是' : '否'}</span></div>`;
+    if (r.toolCount > 0) {
+      detailHtml += `<div class="debug-row"><span class="debug-label">工具数</span> <span class="debug-value">${r.toolCount}</span></div>`;
+    }
+    detailHtml += `<div class="debug-row"><span class="debug-label">MaxTokens</span> <span class="debug-value">${r.maxTokens || '?'}</span></div>`;
+    detailHtml += `<div class="debug-row"><span class="debug-label">Temperature</span> <span class="debug-value">${r.temperature || '?'}</span></div>`;
+
+    if (r.usage && r.usage.total_tokens) {
+      detailHtml += `<div class="debug-row"><span class="debug-label">Token用量</span> <span class="debug-value">输入${r.usage.prompt_tokens || '?'} / 输出${r.usage.completion_tokens || '?'} / 合计${r.usage.total_tokens}</span></div>`;
+    }
+    if (r.finishReason) {
+      detailHtml += `<div class="debug-row"><span class="debug-label">结束原因</span> <span class="debug-value">${r.finishReason}</span></div>`;
+    }
+    if (r.errorDetail) {
+      detailHtml += `<div class="debug-row error-detail"><span class="debug-label">错误</span> <span class="debug-value">${escapeHtml(r.errorDetail)}</span></div>`;
+    }
+
+    // 消息摘要
+    if (r.messageSnippets && r.messageSnippets.length > 0) {
+      detailHtml += '<div class="debug-messages">';
+      r.messageSnippets.forEach(m => {
+        detailHtml += `<div class="debug-msg"><span class="debug-role">${escapeHtml(m.role)}</span> <span class="debug-content">${escapeHtml(m.contentPreview)}</span></div>`;
+      });
+      if (r.messages > 3) {
+        detailHtml += `<div class="debug-msg more">... 还有 ${r.messages - 3} 条消息</div>`;
+      }
+      detailHtml += '</div>';
+    }
+
+    return `
+      <div class="debug-item ${statusClass}">
+        <div class="debug-header">
+          <span>${statusIcon} <strong>${escapeHtml(r.method)} ${escapeHtml(r.path)}</strong></span>
+          <span class="debug-time">${time}</span>
+        </div>
+        <div class="debug-body">
+          ${detailHtml}
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 // ============ 设置 ============
