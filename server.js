@@ -272,6 +272,40 @@ app.get('/api/debug/requests', requireAdmin, (req, res) => {
   res.json({ requests: requestHistory });
 });
 
+// ============ 已知可用模型列表 ============
+const KNOWN_MODELS = new Set([
+  'deepseek-ai/deepseek-r1',
+  'deepseek-ai/deepseek-v3',
+  'meta/llama-3.3-70b-instruct',
+  'meta/llama-3.1-8b-instruct',
+  'meta/llama-3.1-405b-instruct',
+  'meta/llama-3.1-70b-instruct',
+  'meta/llama-3.1-43b-instruct',
+  'meta/llama-3.1-8b-instruct-steerlm',
+  'google/gemma-2-27b-it',
+  'google/gemma-2-9b-it',
+  'mistralai/mistral-large-2-instruct',
+  'mistralai/mistral-7b-instruct-v0.3',
+  'qwen/qwen2.5-72b-instruct',
+  'qwen/qwen2.5-coder-32b-instruct',
+  'qwen/qwq-32b',
+  'nvidia/llama-3.1-nemotron-70b-instruct',
+  'nvidia/llama-3.3-nemotron-super-49b-v1',
+  'nvidia/nemotron-mini-4b-instruct',
+  'cognitivecomputations/dolphin-r1-llama-70b',
+  'ibm/granite-3.1-8b-instruct',
+  'ibm/granite-3.1-32b-instruct',
+  'microsoft/phi-4',
+  'microsoft/phi-4-reasoning-plus',
+  'arctic-ai/snowflake-arctic-embed-l-v2.0',
+  'baichuan-inc/Baichuan4-Turbo',
+  'THUDM/glm-4-9b-chat',
+  'minimax/minimax-m1-80k',
+  'deepseek-ai/deepseek-r1-distill-qwen-32b',
+  'deepseek-ai/deepseek-r1-distill-llama-70b',
+  'moonshotai/kimi-k2',
+]);
+
 // ============ 请求分析工具 ============
 function analyzeRequest(body) {
   if (!body) return {};
@@ -378,125 +412,172 @@ app.all('/v1/*', async (req, res) => {
     }));
   }
 
-  try {
-    const fetchOptions = {
-      method: req.method,
-      headers
-    };
-    if (body) fetchOptions.body = body;
+  // 模型验证警告
+  const modelId = req.body?.model || appData.settings.model;
+  if (modelId && !KNOWN_MODELS.has(modelId)) {
+    addLog('error', `⚠️ 未知模型: ${modelId}`, `该模型可能不可用，建议使用: deepseek-ai/deepseek-r1, deepseek-ai/deepseek-v3, qwen/qwen2.5-72b-instruct 等`);
+  }
 
-    const response = await fetch(targetUrl, fetchOptions);
+  // 带重试的请求逻辑
+  const MAX_RETRIES = 2;
+  let lastError = null;
 
-    if (!response.ok) {
-      const errText = await response.text();
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const fetchOptions = {
+        method: req.method,
+        headers
+      };
+      if (body) fetchOptions.body = body;
+
+      const response = await fetch(targetUrl, fetchOptions);
+
+      if (!response.ok) {
+        const errText = await response.text();
+        keyObj.errors++;
+        stats.totalErrors++;
+        keyObj.status = 'error';
+
+        let errDetail = errText.substring(0, 300);
+        try {
+          const errJson = JSON.parse(errText);
+          errDetail = errJson.error?.message || errJson.message || errText.substring(0, 300);
+        } catch(e) {}
+
+        addLog('error', `❌ 上游错误 ${response.status}`, `Key: ${keyLabel} | Model: ${reqInfo.model} | ${errDetail}`);
+        setTimeout(() => { keyObj.status = 'idle'; }, 3000);
+
+        // 记录请求结果
+        reqRecord.status = 'error';
+        reqRecord.upstreamStatus = response.status;
+        reqRecord.errorDetail = errDetail;
+        recordRequest(reqRecord);
+
+        // 对于 4xx 错误（如无效模型），不再重试
+        if (response.status >= 400 && response.status < 500) {
+          try {
+            const errJson = JSON.parse(errText);
+            return res.status(response.status).json(errJson);
+          } catch(e) {
+            return res.status(response.status).json({
+              error: { message: errText.substring(0, 500), type: 'upstream_error', status: response.status }
+            });
+          }
+        }
+
+        // 5xx 或网络错误可能值得重试
+        lastError = { status: response.status, text: errText };
+        if (attempt < MAX_RETRIES) {
+          // 换一个 Key 重试
+          const retryKeyObj = getNextKey();
+          if (retryKeyObj && retryKeyObj.key !== keyObj.key) {
+            headers['Authorization'] = `Bearer ${retryKeyObj.key}`;
+            addLog('info', `🔄 重试请求 (${attempt + 2}/${MAX_RETRIES + 1})`, `换 Key: ${retryKeyObj.key.substring(0, 12)}... | Model: ${reqInfo.model}`);
+            continue;
+          }
+        }
+        // 无法重试，返回错误
+        try {
+          const errJson = JSON.parse(lastError.text);
+          return res.status(lastError.status).json(errJson);
+        } catch(e) {
+          return res.status(lastError.status).json({
+            error: { message: lastError.text.substring(0, 500), type: 'upstream_error', status: lastError.status }
+          });
+        }
+      }
+
+      // 请求成功，处理响应
+      if (isStream) {
+        // 流式响应 — 转发所有上游头
+        const skipHeaders = new Set(['content-length', 'transfer-encoding', 'connection']);
+        response.headers.forEach((value, name) => {
+          if (!skipHeaders.has(name.toLowerCase())) {
+            res.setHeader(name, value);
+          }
+        });
+        if (!res.getHeader('content-type')) {
+          res.setHeader('Content-Type', 'text/event-stream');
+        }
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+
+        // 统计流式 chunks
+        let chunkCount = 0;
+        let totalTokens = 0;
+
+        response.body.on('data', (chunk) => {
+          chunkCount++;
+          // 尝试从 chunk 中提取 usage 信息
+          try {
+            const lines = chunk.toString().split('\n');
+            for (const line of lines) {
+              if (line.startsWith('data: ') && line.trim() !== 'data: [DONE]') {
+                const data = JSON.parse(line.slice(6));
+                if (data.usage) {
+                  totalTokens = data.usage.total_tokens || 0;
+                }
+              }
+            }
+          } catch(e) {}
+        });
+
+        response.body.pipe(res);
+        response.body.on('end', () => {
+          keyObj.status = 'idle';
+          addLog('info', `✅ 流式完成 [${chunkCount} chunks]`, `Key: ${keyLabel} | Model: ${reqInfo.model}${totalTokens ? ` | Tokens: ${totalTokens}` : ''}`);
+          reqRecord.status = 'success';
+          reqRecord.streamChunks = chunkCount;
+          reqRecord.streamTokens = totalTokens;
+          recordRequest(reqRecord);
+        });
+        response.body.on('error', (err) => {
+          keyObj.status = 'error';
+          keyObj.errors++;
+          stats.totalErrors++;
+          addLog('error', `❌ 流式错误`, `Key: ${keyLabel} | Model: ${reqInfo.model} | ${err.message}`);
+          res.end();
+        });
+      } else {
+        // 非流式响应
+        const data = await response.json();
+        keyObj.status = 'idle';
+
+        const usage = data.usage || {};
+        addLog('info', `✅ 请求成功`, `Key: ${keyLabel} | Model: ${reqInfo.model} | Prompt: ${usage.prompt_tokens || '?'} | Completion: ${usage.completion_tokens || '?'} | Total: ${usage.total_tokens || '?'}${data.choices?.[0]?.finish_reason ? ` | Finish: ${data.choices[0].finish_reason}` : ''}`);
+
+        // 记录请求结果
+        reqRecord.status = 'success';
+        reqRecord.usage = usage;
+        reqRecord.finishReason = data.choices?.[0]?.finish_reason || null;
+        recordRequest(reqRecord);
+
+        res.json(data);
+      }
+      return; // 成功，退出重试循环
+    } catch (err) {
+      lastError = err;
+      // 网络连接错误（ECONNRESET, ETIMEDOUT 等）可以重试
+      if (attempt < MAX_RETRIES && (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.type === 'system')) {
+        const retryKeyObj = getNextKey();
+        if (retryKeyObj && retryKeyObj.key !== keyObj.key) {
+          headers['Authorization'] = `Bearer ${retryKeyObj.key}`;
+          addLog('info', `🔄 网络错误重试 (${attempt + 2}/${MAX_RETRIES + 1})`, `换 Key: ${retryKeyObj.key.substring(0, 12)}... | 原因: ${err.message}`);
+          continue;
+        }
+      }
+      // 不可恢复的错误
       keyObj.errors++;
       stats.totalErrors++;
       keyObj.status = 'error';
-
-      let errDetail = errText.substring(0, 300);
-      try {
-        const errJson = JSON.parse(errText);
-        errDetail = errJson.error?.message || errJson.message || errText.substring(0, 300);
-      } catch(e) {}
-
-      addLog('error', `❌ 上游错误 ${response.status}`, `Key: ${keyLabel} | Model: ${reqInfo.model} | ${errDetail}`);
+      addLog('error', `❌ 请求失败`, `Key: ${keyLabel} | Model: ${reqInfo.model} | ${err.message}`);
+      reqRecord.status = 'failed';
+      reqRecord.errorDetail = err.message;
+      recordRequest(reqRecord);
       setTimeout(() => { keyObj.status = 'idle'; }, 3000);
-
-      // 记录请求结果
-      reqRecord.status = 'error';
-      reqRecord.upstreamStatus = response.status;
-      reqRecord.errorDetail = errDetail;
-      recordRequest(reqRecord);
-
-      // 尝试原样转发上游错误 JSON（兼容 Hermes 等客户端的错误解析）
-      try {
-        const errJson = JSON.parse(errText);
-        return res.status(response.status).json(errJson);
-      } catch(e) {
-        return res.status(response.status).json({
-          error: { message: errText.substring(0, 500), type: 'upstream_error', status: response.status }
-        });
-      }
+      return res.status(502).json({ error: { message: `代理错误: ${err.message}` } });
     }
-
-    if (isStream) {
-      // 流式响应 — 转发所有上游头
-      const skipHeaders = new Set(['content-length', 'transfer-encoding', 'connection']);
-      response.headers.forEach((value, name) => {
-        if (!skipHeaders.has(name.toLowerCase())) {
-          res.setHeader(name, value);
-        }
-      });
-      if (!res.getHeader('content-type')) {
-        res.setHeader('Content-Type', 'text/event-stream');
-      }
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-
-      // 统计流式 chunks
-      let chunkCount = 0;
-      let totalTokens = 0;
-      const originalPipe = response.body.pipe.bind(response.body);
-
-      response.body.on('data', (chunk) => {
-        chunkCount++;
-        // 尝试从 chunk 中提取 usage 信息
-        try {
-          const lines = chunk.toString().split('\n');
-          for (const line of lines) {
-            if (line.startsWith('data: ') && line.trim() !== 'data: [DONE]') {
-              const data = JSON.parse(line.slice(6));
-              if (data.usage) {
-                totalTokens = data.usage.total_tokens || 0;
-              }
-            }
-          }
-        } catch(e) {}
-      });
-
-      response.body.pipe(res);
-      response.body.on('end', () => {
-        keyObj.status = 'idle';
-        addLog('info', `✅ 流式完成 [${chunkCount} chunks]`, `Key: ${keyLabel} | Model: ${reqInfo.model}${totalTokens ? ` | Tokens: ${totalTokens}` : ''}`);
-        reqRecord.status = 'success';
-        reqRecord.streamChunks = chunkCount;
-        reqRecord.streamTokens = totalTokens;
-        recordRequest(reqRecord);
-      });
-      response.body.on('error', (err) => {
-        keyObj.status = 'error';
-        keyObj.errors++;
-        stats.totalErrors++;
-        addLog('error', `❌ 流式错误`, `Key: ${keyLabel} | Model: ${reqInfo.model} | ${err.message}`);
-        res.end();
-      });
-    } else {
-      // 非流式响应
-      const data = await response.json();
-      keyObj.status = 'idle';
-
-      const usage = data.usage || {};
-      addLog('info', `✅ 请求成功`, `Key: ${keyLabel} | Model: ${reqInfo.model} | Prompt: ${usage.prompt_tokens || '?'} | Completion: ${usage.completion_tokens || '?'} | Total: ${usage.total_tokens || '?'}${data.choices?.[0]?.finish_reason ? ` | Finish: ${data.choices[0].finish_reason}` : ''}`);
-
-      // 记录请求结果
-      reqRecord.status = 'success';
-      reqRecord.usage = usage;
-      reqRecord.finishReason = data.choices?.[0]?.finish_reason || null;
-      recordRequest(reqRecord);
-
-      res.json(data);
-    }
-  } catch (err) {
-    keyObj.errors++;
-    stats.totalErrors++;
-    keyObj.status = 'error';
-    addLog('error', `❌ 请求失败`, `Key: ${keyLabel} | Model: ${reqInfo.model} | ${err.message}`);
-    reqRecord.status = 'failed';
-    reqRecord.errorDetail = err.message;
-    recordRequest(reqRecord);
-    setTimeout(() => { keyObj.status = 'idle'; }, 3000);
-    res.status(502).json({ error: { message: `代理错误: ${err.message}` } });
-  }
+  } // end retry loop
 });
 
 // ============ 前端路由 ============
