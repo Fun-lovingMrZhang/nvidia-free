@@ -272,39 +272,63 @@ app.get('/api/debug/requests', requireAdmin, (req, res) => {
   res.json({ requests: requestHistory });
 });
 
-// ============ 已知可用模型列表 ============
-const KNOWN_MODELS = new Set([
-  'deepseek-ai/deepseek-r1',
-  'deepseek-ai/deepseek-v3',
-  'meta/llama-3.3-70b-instruct',
-  'meta/llama-3.1-8b-instruct',
-  'meta/llama-3.1-405b-instruct',
-  'meta/llama-3.1-70b-instruct',
-  'meta/llama-3.1-43b-instruct',
-  'meta/llama-3.1-8b-instruct-steerlm',
-  'google/gemma-2-27b-it',
-  'google/gemma-2-9b-it',
-  'mistralai/mistral-large-2-instruct',
-  'mistralai/mistral-7b-instruct-v0.3',
-  'qwen/qwen2.5-72b-instruct',
-  'qwen/qwen2.5-coder-32b-instruct',
-  'qwen/qwq-32b',
-  'nvidia/llama-3.1-nemotron-70b-instruct',
-  'nvidia/llama-3.3-nemotron-super-49b-v1',
-  'nvidia/nemotron-mini-4b-instruct',
-  'cognitivecomputations/dolphin-r1-llama-70b',
-  'ibm/granite-3.1-8b-instruct',
-  'ibm/granite-3.1-32b-instruct',
-  'microsoft/phi-4',
-  'microsoft/phi-4-reasoning-plus',
-  'arctic-ai/snowflake-arctic-embed-l-v2.0',
-  'baichuan-inc/Baichuan4-Turbo',
-  'THUDM/glm-4-9b-chat',
-  'minimax/minimax-m1-80k',
-  'deepseek-ai/deepseek-r1-distill-qwen-32b',
-  'deepseek-ai/deepseek-r1-distill-llama-70b',
-  'moonshotai/kimi-k2',
-]);
+// 查看已知模型列表（从 NVIDIA API 动态获取）
+app.get('/api/models', requireAdmin, (req, res) => {
+  res.json({
+    count: KNOWN_MODELS.size,
+    lastUpdated: modelsLastUpdated,
+    models: Array.from(KNOWN_MODELS).sort()
+  });
+});
+
+// 手动刷新模型列表
+app.post('/api/models/refresh', requireAdmin, async (req, res) => {
+  await fetchKnownModels();
+  res.json({
+    success: true,
+    count: KNOWN_MODELS.size,
+    lastUpdated: modelsLastUpdated,
+    models: Array.from(KNOWN_MODELS).sort()
+  });
+});
+
+// ============ 已知可用模型列表（动态从 NVIDIA API 获取） ============
+const KNOWN_MODELS = new Set();
+let modelsLastUpdated = null;
+
+async function fetchKnownModels() {
+  // 用任意一个 enabled key 来拉取模型列表
+  const keyObj = appData.keys.find(k => k.enabled);
+  if (!keyObj) {
+    console.log('⚠️ 没有可用的 API Key，跳过模型列表更新');
+    return;
+  }
+  try {
+    const baseUrl = appData.settings?.baseUrl || 'https://integrate.api.nvidia.com/v1';
+    const response = await fetch(`${baseUrl}/models`, {
+      headers: { 'Authorization': `Bearer ${keyObj.key}` }
+    });
+    if (!response.ok) {
+      console.error(`⚠️ 拉取模型列表失败: HTTP ${response.status}`);
+      return;
+    }
+    const data = await response.json();
+    if (data.data && Array.isArray(data.data)) {
+      KNOWN_MODELS.clear();
+      data.data.forEach(m => {
+        if (m.id) KNOWN_MODELS.add(m.id);
+      });
+      modelsLastUpdated = new Date().toISOString();
+      console.log(`✅ 已从 NVIDIA API 获取 ${KNOWN_MODELS.size} 个可用模型`);
+    }
+  } catch (e) {
+    console.error('⚠️ 拉取模型列表失败:', e.message);
+  }
+}
+
+// 启动时拉取一次，之后每小时刷新
+fetchKnownModels();
+setInterval(fetchKnownModels, 60 * 60 * 1000);
 
 // ============ 请求分析工具 ============
 function analyzeRequest(body) {
@@ -415,7 +439,10 @@ app.all('/v1/*', async (req, res) => {
   // 模型验证警告
   const modelId = req.body?.model || appData.settings.model;
   if (modelId && !KNOWN_MODELS.has(modelId)) {
-    addLog('error', `⚠️ 未知模型: ${modelId}`, `该模型可能不可用，建议使用: deepseek-ai/deepseek-r1, deepseek-ai/deepseek-v3, qwen/qwen2.5-72b-instruct 等`);
+    const sampleModels = KNOWN_MODELS.size > 0
+      ? Array.from(KNOWN_MODELS).slice(0, 3).join(', ')
+      : '(模型列表尚未加载)';
+    addLog('warn', `⚠️ 未知模型: ${modelId}`, `该模型可能不可用。当前已知 ${KNOWN_MODELS.size} 个模型，示例: ${sampleModels}`);
   }
 
   // 带重试的请求逻辑
