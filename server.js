@@ -90,8 +90,29 @@ let stats = {
   totalRequests: 0,
   totalErrors: 0,
   startTime: Date.now(),
-  recentLogs: []
+  recentLogs: [],
+  // Token 用量统计
+  totalTokens: 0,
+  promptTokens: 0,
+  completionTokens: 0,
+  tokensByModel: {},
 };
+
+// 记录 token 用量
+function recordTokens(model, usage) {
+  if (!usage || !usage.total_tokens) return;
+  stats.totalTokens += usage.total_tokens;
+  stats.promptTokens += usage.prompt_tokens || 0;
+  stats.completionTokens += usage.completion_tokens || 0;
+  const m = model || 'unknown';
+  if (!stats.tokensByModel[m]) {
+    stats.tokensByModel[m] = { requests: 0, prompt: 0, completion: 0, total: 0 };
+  }
+  stats.tokensByModel[m].requests++;
+  stats.tokensByModel[m].prompt += usage.prompt_tokens || 0;
+  stats.tokensByModel[m].completion += usage.completion_tokens || 0;
+  stats.tokensByModel[m].total += usage.total_tokens;
+}
 
 function addLog(type, message, detail = '') {
   const log = { time: new Date().toISOString(), type, message, detail };
@@ -161,7 +182,20 @@ app.get('/api/stats', requireAdmin, (req, res) => {
     activeKeys: appData.keys.filter(k => k.enabled).length,
     totalKeys: appData.keys.length,
     uptime,
-    uptimeFormatted: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${uptime % 60}s`
+    uptimeFormatted: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${uptime % 60}s`,
+    totalTokens: stats.totalTokens,
+    promptTokens: stats.promptTokens,
+    completionTokens: stats.completionTokens
+  });
+});
+
+// 获取 Token 用量详情
+app.get('/api/tokens', requireAdmin, (req, res) => {
+  res.json({
+    totalTokens: stats.totalTokens,
+    promptTokens: stats.promptTokens,
+    completionTokens: stats.completionTokens,
+    byModel: stats.tokensByModel
   });
 });
 
@@ -557,6 +591,9 @@ app.all('/v1/*', async (req, res) => {
           reqRecord.streamChunks = chunkCount;
           reqRecord.streamTokens = totalTokens;
           recordRequest(reqRecord);
+          if (totalTokens > 0) {
+            recordTokens(reqInfo.model, { total_tokens: totalTokens, prompt_tokens: 0, completion_tokens: 0 });
+          }
         });
         response.body.on('error', (err) => {
           keyObj.status = 'error';
@@ -578,6 +615,7 @@ app.all('/v1/*', async (req, res) => {
         reqRecord.usage = usage;
         reqRecord.finishReason = data.choices?.[0]?.finish_reason || null;
         recordRequest(reqRecord);
+        recordTokens(reqInfo.model, usage);
 
         res.json(data);
       }

@@ -246,6 +246,14 @@ async function loadStats() {
     document.getElementById('activeKeys').textContent = `${stats.activeKeys}/${stats.totalKeys}`;
     document.getElementById('uptime').textContent = stats.uptimeFormatted;
     
+    // Token 用量格式化
+    const tokens = stats.totalTokens || 0;
+    document.getElementById('totalTokens').textContent = tokens >= 1000000
+      ? `${(tokens / 1000000).toFixed(1)}M`
+      : tokens >= 1000
+      ? `${(tokens / 1000).toFixed(1)}K`
+      : tokens;
+    
     document.getElementById('serverStatus').classList.remove('offline');
   } catch (e) {
     document.getElementById('serverStatus').classList.add('offline');
